@@ -51,7 +51,7 @@ void i2s_adc_data_scale(uint8_t *d_buff, uint8_t *s_buff, uint32_t len);
 void i2s_adc();
 void uploadFile();
 void connectToWiFi();
-void callGoogleSpeechApi(const char *base64Audio);
+void callGoogleSpeechApi();
 void encodeBase64(File file);
 
 void setup()
@@ -376,10 +376,10 @@ void uploadFile()
   file.close();
 
   // TEST
-  // Serial.println(global_encoded);
+  Serial.println(global_encoded);
 
   // Call Google Cloud Speech-to-Text API
-  callGoogleSpeechApi(global_encoded);
+  callGoogleSpeechApi();
 
   // Check if API call was successful
   if (response.isEmpty())
@@ -406,6 +406,16 @@ void encodeBase64(File file)
     if (bytesRead > 0)
     {
       String chunk = base64::encode(buffer, bytesRead);
+
+      // Replace non-readable characters with 'A'
+      for (size_t i = 0; i < chunk.length(); ++i)
+      {
+        if (!isalnum(chunk[i]) && chunk[i] != '+' && chunk[i] != '/' && chunk[i] != '=')
+        {
+          chunk[i] = 'A';
+        }
+      }
+
       chunk.replace("\n", ""); // delete last "\n"
       encoded += chunk;        // concatenate the chunks
     }
@@ -413,7 +423,7 @@ void encodeBase64(File file)
   global_encoded = encoded.c_str();
 }
 
-void callGoogleSpeechApi(const char *base64Audio)
+void callGoogleSpeechApi()
 {
   // Ensure WiFi is connected
   if (WiFi.status() != WL_CONNECTED)
@@ -454,7 +464,7 @@ void callGoogleSpeechApi(const char *base64Audio)
   Serial.println("Connected to Google Cloud API");
 
   // Prepare the request
-  String requestBody = "{\"config\": {\"encoding\":\"LINEAR16\",\"sampleRateHertz\":16000,\"languageCode\":\"en-US\"},\"audio\":{\"content\":\"" + String(base64Audio) + "\"}}";
+  String requestBody = "{\"config\": {\"encoding\":\"LINEAR16\",\"sampleRateHertz\":16000,\"languageCode\":\"en-US\"},\"audio\":{\"content\":\"" + String(global_encoded) + "\"}}";
   String contentLength = String(requestBody.length());
   String request = "POST " + String(googleCloudEndpoint) + "?key=" + String(googleCloudApiKey) + " HTTP/1.1\r\n" + "Host: " + server + "\r\n" + "Content-Type: application/json\r\n" + "Content-Length: " + contentLength + "\r\n\r\n" + requestBody;
 
