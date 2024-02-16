@@ -17,7 +17,7 @@
 #define I2S_SAMPLE_RATE (16000)
 #define I2S_SAMPLE_BITS (16)
 #define I2S_READ_LEN (I2S_SAMPLE_BITS * 1024)
-#define RECORD_TIME (2) // Record N seconds
+#define RECORD_TIME (1) // Record N seconds
 #define I2S_CHANNEL_NUM (1)
 #define FLASH_RECORD_SIZE (I2S_CHANNEL_NUM * I2S_SAMPLE_RATE * I2S_SAMPLE_BITS / 8 * RECORD_TIME)
 
@@ -34,9 +34,11 @@
 // global variables
 File file;
 String response = "";
-String global_encoded;
+WiFiClientSecure client;
+int global_encoded_size;
 const char filename[] = "/recording.wav";
 const int headerSize = 44;
+byte paddedHeader[headerSize + 4] = {0};
 bool isWIFIConnected = false;
 bool isRecorded = false;
 
@@ -52,6 +54,7 @@ void i2s_adc();
 void connectToWiFi();
 void callGoogleSpeechApi();
 void encodeBase64();
+void encodeBase64_size();
 
 void setup()
 {
@@ -109,7 +112,7 @@ void setup()
     if (isWIFIConnected && isRecorded)
     {
       digitalWrite(record_state_led, 0);
-      encodeBase64();
+      // encodeBase64();
       callGoogleSpeechApi();
       break;
     }
@@ -362,6 +365,48 @@ void connectToWiFi()
   }
 }
 
+void encodeBase64_size()
+{
+  const int bufferSize = 512;
+  byte buffer[bufferSize];
+  size_t bytesRead;
+  String encoded;
+
+  file = SPIFFS.open(filename, FILE_READ);
+  if (!file)
+  {
+    Serial.println("Failed to open the file.");
+    return;
+  }
+
+  String chunk = base64::encode(paddedHeader, sizeof(paddedHeader));
+  chunk.replace("\n", ""); // delete last "\n"
+  encoded += chunk;
+
+  while (file.available())
+  {
+    bytesRead = file.read(buffer, bufferSize);
+    if (bytesRead > 0)
+    {
+      chunk = base64::encode(buffer, bytesRead);
+      // Replace non-readable characters with 'A'
+      for (size_t i = 0; i < chunk.length(); ++i)
+      {
+        if (!isalnum(chunk[i]) && chunk[i] != '+' && chunk[i] != '/' && chunk[i] != '=')
+        {
+          chunk[i] = 'A';
+        }
+      }
+
+      chunk.replace("\n", ""); // delete last "\n"
+      encoded += chunk; // concatenate the chunks
+    }
+  }
+  global_encoded_size = encoded.length();
+  file.close();
+  customDelay(100);
+}
+
 void encodeBase64()
 {
   const int bufferSize = 512;
@@ -375,12 +420,16 @@ void encodeBase64()
     return;
   }
 
+  String chunk = base64::encode(paddedHeader, sizeof(paddedHeader));
+  chunk.replace("\n", ""); // delete last "\n"
+  client.print(chunk);     // HttpBody2
+
   while (file.available())
   {
     bytesRead = file.read(buffer, bufferSize);
     if (bytesRead > 0)
     {
-      String chunk = base64::encode(buffer, bytesRead);
+      chunk = base64::encode(buffer, bytesRead);
       // Replace non-readable characters with 'A'
       for (size_t i = 0; i < chunk.length(); ++i)
       {
@@ -391,7 +440,8 @@ void encodeBase64()
       }
 
       chunk.replace("\n", ""); // delete last "\n"
-      global_encoded += chunk;        // concatenate the chunks
+      client.print(chunk);     // HttpBody2
+      // global_encoded += chunk; // concatenate the chunks
     }
   }
   file.close();
@@ -419,7 +469,6 @@ void callGoogleSpeechApi()
   Serial.println("Host-IP address: " + ip.toString());
 
   // SSL/TLS setup
-  WiFiClientSecure client;
   client.setCACert(root_cert);
 
   // Attempt to connect to Google Cloud API
@@ -440,15 +489,39 @@ void callGoogleSpeechApi()
   }
   Serial.println("Connected to Google Cloud API");
 
-  // Prepare the request
-  String requestBody = "{\"config\": {\"encoding\":\"LINEAR16\",\"sampleRateHertz\":16000,\"languageCode\":\"en-US\"},\"audio\":{\"content\":\"" + String(global_encoded) + "\"}}";
-  String contentLength = String(requestBody.length());
-  String request = "POST " + String(googleCloudEndpoint) + "?key=" + String(googleCloudApiKey) + " HTTP/1.1\r\n" + "Host: " + server + "\r\n" + "Content-Type: application/json\r\n" + "Content-Length: " + contentLength + "\r\n\r\n" + requestBody;
+  /*
+    // Prepare the request
+    String requestBody = "{\"config\": {\"encoding\":\"LINEAR16\",\"sampleRateHertz\":16000,\"languageCode\":\"en-US\"},\"audio\":{\"content\":\"" + String(global_encoded) + "\"}}";
+    String contentLength = String(requestBody.length());
+    String request = "POST " + String(googleCloudEndpoint) + "?key=" + String(googleCloudApiKey) + " HTTP/1.1\r\n" + "Host: " + server + "\r\n" + "Content-Type: application/json\r\n" + "Content-Length: " + contentLength + "\r\n\r\n" + requestBody;
 
-  // Send the request
-  Serial.println("Sending request:");
-  Serial.println(request);
-  client.print(request);
+    // Send the request
+    Serial.println("Sending request:");
+    Serial.println(request);
+    client.print(request);
+  */
+
+  encodeBase64_size();
+  Serial.println("global_encoded_size:");
+  Serial.println(global_encoded_size);
+  String HttpBody1 = "{\"config\":{\"encoding\":\"LINEAR16\",\"sampleRateHertz\":16000,\"languageCode\":\"en-IN\"},\"audio\":{\"content\":\"";
+  String HttpBody3 = "\"}}\r\n\r\n";
+  int httpBody2Length = (global_encoded_size + sizeof(paddedHeader)); 
+  String ContentLength = String(HttpBody1.length() + httpBody2Length + HttpBody3.length());
+
+  String HttpHeader;
+  HttpHeader = String("POST /v1/speech:recognize?key=") + googleCloudApiKey + String(" HTTP/1.1\r\nHost: speech.googleapis.com\r\nContent-Type: application/json\r\nContent-Length: ") + ContentLength + String("\r\n\r\n");
+
+  Serial.println("httpBody2Length:");
+  Serial.println(httpBody2Length);
+
+  client.print(HttpHeader);
+  client.print(HttpBody1);
+  encodeBase64();
+  client.print(HttpBody3);
+  while (!client.available())
+  {
+  }
 
   // Receive and process the response
   unsigned long timeout = millis();
