@@ -17,7 +17,7 @@
 #define I2S_SAMPLE_RATE (16000)
 #define I2S_SAMPLE_BITS (16)
 #define I2S_READ_LEN (I2S_SAMPLE_BITS * 1024)
-#define RECORD_TIME (5) // Record N seconds
+#define RECORD_TIME (2) // Record N seconds
 #define I2S_CHANNEL_NUM (1)
 #define FLASH_RECORD_SIZE (I2S_CHANNEL_NUM * I2S_SAMPLE_RATE * I2S_SAMPLE_BITS / 8 * RECORD_TIME)
 
@@ -34,7 +34,7 @@
 // global variables
 File file;
 String response = "";
-const char *global_encoded;
+String global_encoded;
 const char filename[] = "/recording.wav";
 const int headerSize = 44;
 bool isWIFIConnected = false;
@@ -49,10 +49,9 @@ void start_deep_sleep();
 void i2s_init();
 void i2s_adc_data_scale(uint8_t *d_buff, uint8_t *s_buff, uint32_t len);
 void i2s_adc();
-void uploadFile();
 void connectToWiFi();
 void callGoogleSpeechApi();
-void encodeBase64(File file);
+void encodeBase64();
 
 void setup()
 {
@@ -110,7 +109,8 @@ void setup()
     if (isWIFIConnected && isRecorded)
     {
       digitalWrite(record_state_led, 0);
-      uploadFile();
+      encodeBase64();
+      callGoogleSpeechApi();
       break;
     }
     else
@@ -362,8 +362,12 @@ void connectToWiFi()
   }
 }
 
-void uploadFile()
+void encodeBase64()
 {
+  const int bufferSize = 512;
+  byte buffer[bufferSize];
+  size_t bytesRead;
+
   file = SPIFFS.open(filename, FILE_READ);
   if (!file)
   {
@@ -371,42 +375,12 @@ void uploadFile()
     return;
   }
 
-  // Read file content
-  encodeBase64(file);
-  file.close();
-
-  // TEST
-  Serial.println(global_encoded);
-
-  // Call Google Cloud Speech-to-Text API
-  callGoogleSpeechApi();
-
-  // Check if API call was successful
-  if (response.isEmpty())
-  {
-    Serial.println("Failed to get transcription from Google Cloud API");
-    return;
-  }
-  else
-  {
-    Serial.println("Transcription: " + response);
-  }
-}
-
-void encodeBase64(File file)
-{
-  const int bufferSize = 512;
-  byte buffer[bufferSize];
-  size_t bytesRead;
-  String encoded;
-
   while (file.available())
   {
     bytesRead = file.read(buffer, bufferSize);
     if (bytesRead > 0)
     {
       String chunk = base64::encode(buffer, bytesRead);
-
       // Replace non-readable characters with 'A'
       for (size_t i = 0; i < chunk.length(); ++i)
       {
@@ -417,14 +391,17 @@ void encodeBase64(File file)
       }
 
       chunk.replace("\n", ""); // delete last "\n"
-      encoded += chunk;        // concatenate the chunks
+      global_encoded += chunk;        // concatenate the chunks
     }
   }
-  global_encoded = encoded.c_str();
+  file.close();
+  SPIFFS.remove(filename);
+  customDelay(100);
 }
 
 void callGoogleSpeechApi()
 {
+
   // Ensure WiFi is connected
   if (WiFi.status() != WL_CONNECTED)
   {
